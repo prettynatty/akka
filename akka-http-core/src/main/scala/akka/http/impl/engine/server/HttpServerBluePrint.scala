@@ -75,9 +75,9 @@ private[http] object HttpServerBluePrint {
     val requestPreparation =
       Flow[RequestOutput]
         .splitWhen(x ⇒ x.isInstanceOf[MessageStart] || x == MessageEnd)
-        .via(headAndTailFlow)
+        .prefixAndTail(1)
         .map {
-          case (RequestStart(method, uri, protocol, hdrs, createEntity, _, _), entityParts) ⇒
+          case (Seq(RequestStart(method, uri, protocol, hdrs, createEntity, _, _)), entityParts) ⇒
             val effectiveMethod = if (method == HttpMethods.HEAD && transparentHeadRequests) HttpMethods.GET else method
             val effectiveHeaders =
               if (settings.remoteAddressHeader && remoteAddress.isDefined)
@@ -87,7 +87,8 @@ private[http] object HttpServerBluePrint {
             val entity = createEntity(entityParts) withSizeLimit parserSettings.maxContentLength
             HttpRequest(effectiveMethod, uri, effectiveHeaders, entity, protocol)
           case (_, src) ⇒ src.runWith(Sink.ignore)
-        }.collect {
+        }.concatSubstreams
+        .collect {
           case r: HttpRequest ⇒ r
         }
         // FIXME #16583 / #18170
