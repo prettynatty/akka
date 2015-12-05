@@ -21,16 +21,18 @@ final class FlattenMerge[T, M](breadth: Int) extends GraphStage[FlowShape[Source
 
   override def createLogic(attr: Attributes) = new GraphStageLogic(shape) {
 
+    import StreamOfStreams.{ LocalSink, LocalSource }
+
     var sources = Set.empty[LocalSource[T]]
     def activeSources = sources.size
 
-    private trait Queue {
+    private sealed trait Queue {
       def hasData: Boolean
       def enqueue(src: LocalSource[T]): Unit
       def dequeue(): LocalSource[T]
     }
 
-    private class FixedQueue extends Queue {
+    private final class FixedQueue extends Queue {
       final val Size = 16
       final val Mask = 15
 
@@ -58,7 +60,7 @@ final class FlattenMerge[T, M](breadth: Int) extends GraphStage[FlowShape[Source
       }
     }
 
-    private class DynamicQueue extends ju.LinkedList[LocalSource[T]] with Queue {
+    private final class DynamicQueue extends ju.LinkedList[LocalSource[T]] with Queue {
       def hasData = !isEmpty()
       def enqueue(src: LocalSource[T]): Unit = add(src)
       def dequeue(): LocalSource[T] = remove()
@@ -132,42 +134,46 @@ final class FlattenMerge[T, M](breadth: Int) extends GraphStage[FlowShape[Source
   }
 }
 
-// TODO possibly place the Local* classes in a companion object depending on where they are reused
-
 /**
  * INTERNAL API
  */
-private[fusing] final class LocalSinkSubscription[T](sub: ActorPublisherMessage ⇒ Unit) {
-  def pull(): Unit = sub(Request(1))
-  def cancel(): Unit = sub(Cancel)
-}
+private[fusing] object StreamOfStreams {
+  private val RequestOne = Request(1) // No need to frivolously allocate these
+  /**
+   * INTERNAL API
+   */
+  final class LocalSinkSubscription[T](sub: ActorPublisherMessage ⇒ Unit) {
+    def pull(): Unit = sub(RequestOne)
+    def cancel(): Unit = sub(Cancel)
+  }
 
-/**
- * INTERNAL API
- */
-private[fusing] final class LocalSource[T](var sub: LocalSinkSubscription[T] = null, var elem: T = null.asInstanceOf[T])
+  /**
+   * INTERNAL API
+   */
+  final class LocalSource[T](var sub: LocalSinkSubscription[T] = null, var elem: T = null.asInstanceOf[T])
 
-/**
- * INTERNAL API
- */
-private[fusing] final class LocalSink[T](notifier: ActorSubscriberMessage ⇒ Unit) extends GraphStageWithMaterializedValue[SinkShape[T], LocalSinkSubscription[T]] {
-  private val in = Inlet[T]("LocalSink.in")
-  override val shape = SinkShape(in)
-  override def createLogicAndMaterializedValue(attr: Attributes) = {
-    class Logic extends GraphStageLogic(shape) {
-      setHandler(in, new InHandler {
-        override def onPush(): Unit = notifier(OnNext(grab(in)))
-        override def onUpstreamFinish(): Unit = notifier(OnComplete)
-        override def onUpstreamFailure(ex: Throwable): Unit = notifier(OnError(ex))
-      })
-      val sub = new LocalSinkSubscription[T](getAsyncCallback[ActorPublisherMessage] {
-        case Request(1) ⇒ tryPull(in)
-        case Cancel     ⇒ completeStage()
-        case _          ⇒
-      }.invoke)
-      override def preStart(): Unit = pull(in)
+  /**
+   * INTERNAL API
+   */
+  private[fusing] final class LocalSink[T](notifier: ActorSubscriberMessage ⇒ Unit) extends GraphStageWithMaterializedValue[SinkShape[T], LocalSinkSubscription[T]] {
+    private val in = Inlet[T]("LocalSink.in")
+    override val shape = SinkShape(in)
+    override def createLogicAndMaterializedValue(attr: Attributes) = {
+      final class Logic extends GraphStageLogic(shape) {
+        setHandler(in, new InHandler {
+          override def onPush(): Unit = notifier(OnNext(grab(in)))
+          override def onUpstreamFinish(): Unit = notifier(OnComplete)
+          override def onUpstreamFailure(ex: Throwable): Unit = notifier(OnError(ex))
+        })
+        val sub = new LocalSinkSubscription[T](getAsyncCallback[ActorPublisherMessage] {
+          case RequestOne ⇒ tryPull(in)
+          case Cancel     ⇒ completeStage()
+          case _          ⇒ // FIXME Why is this case acceptable?
+        }.invoke)
+        override def preStart(): Unit = pull(in)
+      }
+      val logic = new Logic
+      logic -> logic.sub
     }
-    val logic = new Logic
-    logic -> logic.sub
   }
 }
