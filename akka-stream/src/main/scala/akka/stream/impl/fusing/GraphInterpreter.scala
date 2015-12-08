@@ -146,8 +146,10 @@ private[stream] object GraphInterpreter {
         }
 
         val stage = stages(i)
-        if (stage.isInstanceOf[MaterializedValueSource[_]])
-          register(stage.asInstanceOf[MaterializedValueSource[Any]])
+        stage match {
+          case mv: MaterializedValueSource[_] ⇒ register(mv.copy.asInstanceOf[MaterializedValueSource[Any]])
+          case _                              ⇒
+        }
 
         val logicAndMat = stage.createLogicAndMaterializedValue(inheritedAttributes and originalAttributes(i))
         matVal.put(copiedModules(i), logicAndMat._2)
