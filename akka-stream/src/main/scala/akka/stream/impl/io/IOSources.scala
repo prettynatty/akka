@@ -18,7 +18,7 @@ import scala.concurrent.{ Future, Promise }
  * INTERNAL API
  * Creates simple synchronous (Java 6 compatible) Source backed by the given file.
  */
-private[akka] final class FileSource(f: File, chunkSize: Int, val attributes: Attributes, shape: SourceShape[ByteString])
+private[akka] final class FileSource(f: File, chunkSize: Int, startPosition: Int, val attributes: Attributes, shape: SourceShape[ByteString])
   extends SourceModule[ByteString, Future[Long]](shape) {
   require(chunkSize > 0, "chunkSize must be greater than 0")
   override def create(context: MaterializationContext) = {
@@ -27,7 +27,7 @@ private[akka] final class FileSource(f: File, chunkSize: Int, val attributes: At
     val settings = materializer.effectiveSettings(context.effectiveAttributes)
 
     val bytesReadPromise = Promise[Long]()
-    val props = FilePublisher.props(f, bytesReadPromise, chunkSize, settings.initialInputBufferSize, settings.maxInputBufferSize)
+    val props = FilePublisher.props(f, bytesReadPromise, chunkSize, startPosition, settings.initialInputBufferSize, settings.maxInputBufferSize)
     val dispatcher = context.effectiveAttributes.get[Dispatcher](IODispatcher).dispatcher
 
     val ref = materializer.actorOf(context, props.withDispatcher(dispatcher))
@@ -36,10 +36,10 @@ private[akka] final class FileSource(f: File, chunkSize: Int, val attributes: At
   }
 
   override protected def newInstance(shape: SourceShape[ByteString]): SourceModule[ByteString, Future[Long]] =
-    new FileSource(f, chunkSize, attributes, shape)
+    new FileSource(f, chunkSize, startPosition, attributes, shape)
 
   override def withAttributes(attr: Attributes): Module =
-    new FileSource(f, chunkSize, attr, amendShape(attr))
+    new FileSource(f, chunkSize, startPosition, attr, amendShape(attr))
 }
 
 /**

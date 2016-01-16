@@ -17,12 +17,13 @@ import scala.util.control.NonFatal
 
 /** INTERNAL API */
 private[akka] object FilePublisher {
-  def props(f: File, completionPromise: Promise[Long], chunkSize: Int, initialBuffer: Int, maxBuffer: Int) = {
+  def props(f: File, completionPromise: Promise[Long], chunkSize: Int, startPosition: Int, initialBuffer: Int, maxBuffer: Int) = {
     require(chunkSize > 0, s"chunkSize must be > 0 (was $chunkSize)")
     require(initialBuffer > 0, s"initialBuffer must be > 0 (was $initialBuffer)")
     require(maxBuffer >= initialBuffer, s"maxBuffer must be >= initialBuffer (was $maxBuffer)")
+    require(startPosition >= 0, s"startPosition must be >= 0 (was $startPosition)")
 
-    Props(classOf[FilePublisher], f, completionPromise, chunkSize, initialBuffer, maxBuffer)
+    Props(classOf[FilePublisher], f, completionPromise, chunkSize, startPosition, initialBuffer, maxBuffer)
       .withDeploy(Deploy.local)
   }
 
@@ -32,7 +33,7 @@ private[akka] object FilePublisher {
 }
 
 /** INTERNAL API */
-private[akka] final class FilePublisher(f: File, bytesReadPromise: Promise[Long], chunkSize: Int, initialBuffer: Int, maxBuffer: Int)
+private[akka] final class FilePublisher(f: File, bytesReadPromise: Promise[Long], chunkSize: Int, startPosition: Int, initialBuffer: Int, maxBuffer: Int)
   extends akka.stream.actor.ActorPublisher[ByteString] with ActorLogging {
   import FilePublisher._
 
@@ -47,6 +48,8 @@ private[akka] final class FilePublisher(f: File, bytesReadPromise: Promise[Long]
   override def preStart() = {
     try {
       chan = FileChannel.open(f.toPath, FilePublisher.Read)
+      if (startPosition != 0)
+        chan.position(startPosition)
     } catch {
       case ex: Exception ⇒
         onErrorThenStop(ex)
